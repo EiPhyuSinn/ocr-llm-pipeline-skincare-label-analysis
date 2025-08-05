@@ -87,17 +87,19 @@ function App() {
           {activeTab === 'upload' && (
             <div className="cute-container">
               <div className="upload-section">
+                {/* Always render the file input, just keep it hidden */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleImageUpload}
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                />
+                
                 {!preview ? (
                   <div className="upload-box" onClick={triggerFileInput}>
                     <div className="emoji">📸</div>
                     <p>Tap to upload your product label 🧴✨</p>
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      onChange={handleImageUpload}
-                      accept="image/*"
-                      style={{ display: 'none' }}
-                    />
                   </div>
                 ) : (
                   <div className="image-preview-container">

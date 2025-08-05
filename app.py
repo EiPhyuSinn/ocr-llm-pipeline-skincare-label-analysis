@@ -1,55 +1,70 @@
 import streamlit as st
-import cv2
-import numpy as np
 from PIL import Image
 import pytesseract
-import spacy
-import pandas as pd
+import numpy as np
+import tempfile
+from dotenv import load_dotenv
+import os
+from langchain_groq import ChatGroq
+from langgraph.graph import StateGraph
+from typing import TypedDict
 
-st.title("📄 Smart Document Scanner")
+load_dotenv()
 
-uploaded_file = st.file_uploader("Upload a receipt/invoice", type=["jpg", "png", "jpeg"])
-capture = st.camera_input("Or take a photo")
+def ocr_node(state):
+    image_path = state["image_path"]
+    text = pytesseract.image_to_string(np.array(Image.open(image_path)))
+    return {"text": text}
 
-image = uploaded_file if uploaded_file else capture
+def ask_question_node(state):
+    text = state["text"].strip()
+    question = state["question"].strip().lower()
 
-def preprocess_image(image):
-    img = np.array(Image.open(image))
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(blurred, 50, 150)
-    return edged
+    if not text:
+        return {"answer": "❌ Sorry, I couldn't read any text from the image. Please upload a clearer image."}
 
-def extract_text(image):
-    text = pytesseract.image_to_string(np.array(Image.open(image)))
-    return text
+    prompt = f"You are a skincare ingredient expert. Only answer questions based on this product label.\n\nDocument:\n{text}\n\nQuestion: {question}"
+    llm = ChatGroq(model_name="llama3-70b-8192", temperature=0.7)
+    response = llm.invoke(prompt)
+    return {"answer": response.content}
 
-def parse_info(text):
-    nlp = spacy.load("en_core_web_sm")
-    doc = nlp(text)
-    data = {"vendor": None, "date": None, "amount": None}
-    for ent in doc.ents:
-        if ent.label_ == "ORG" and not data["vendor"]:
-            data["vendor"] = ent.text
-        elif ent.label_ == "DATE" and not data["date"]:
-            data["date"] = ent.text
-        elif ent.label_ == "MONEY" and not data["amount"]:
-            data["amount"] = ent.text
-    return data
 
-if image:
-    st.image(image, caption="Uploaded Document", use_column_width=True)
+class GraphState(TypedDict):
+    image_path: str
+    text: str
+    question: str
+    answer: str
 
-    edged_image = preprocess_image(image)
-    st.image(edged_image, caption="Edges Detected", use_column_width=True)
+builder = StateGraph(GraphState)
+builder.add_node("OCR", ocr_node)
+builder.add_node("AskQuestion", ask_question_node)
+builder.set_entry_point("OCR")
+builder.add_edge("OCR", "AskQuestion")
+builder.set_finish_point("AskQuestion")
+graph = builder.compile()
 
-    extracted_text = extract_text(image)
-    st.text_area("Extracted Text", extracted_text)
+st.set_page_config(page_title="📄 OCR + LLM QA", layout="centered")
+st.title("📄 Ask Questions About Your Image")
 
-    parsed_data = parse_info(extracted_text)
-    st.json(parsed_data)
+uploaded_file = st.file_uploader("Upload an image (receipt, label, etc)", type=["jpg", "jpeg", "png"])
 
-    if st.button("Save Data"):
-        df = pd.DataFrame([parsed_data])
-        df.to_csv("receipt_data.csv", index=False)
-        st.success("Saved to receipt_data.csv!")
+if uploaded_file:
+    st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
+    question = st.text_input("Ask a question about the image")
+
+    if question:
+        with st.spinner("Processing image and querying LLM..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+                tmp_file.write(uploaded_file.read())
+                tmp_image_path = tmp_file.name
+
+            result = graph.invoke({
+                "image_path": tmp_image_path,
+                "question": question
+            })
+
+            st.subheader("📝 Extracted Text")
+            st.text(result["text"].strip())
+
+            st.subheader("🤖 LLM Answer")
+            st.success(result["answer"].strip())
